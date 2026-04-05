@@ -1,0 +1,30 @@
+import { createPageResolver } from 'laravel-modules-inertia/resolve-page';
+import type { ResolvedComponent } from '@inertiajs/react';
+import { route as ziggyRoute } from 'ziggy-js';
+
+const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
+
+const applicationPages = import.meta.glob<ResolvedComponent>('../pages/**/*.tsx');
+const modulePages = import.meta.glob<ResolvedComponent>('../../../Modules/*/resources/views/**/*.tsx');
+
+export const resolveInertiaPage = createPageResolver({
+    applicationPages,
+    modulePages,
+});
+
+export function inertiaTitle(title: string): string {
+    return title ? `${title} - ${appName}` : appName;
+}
+
+/**
+ * Configure SSR route resolution for Ziggy.
+ */
+export function configureSsrRoute(page: { props: Record<string, unknown> }): void {
+    const ziggyConfig = (page.props as { ziggy: Record<string, unknown> & { location: string } }).ziggy;
+
+    globalThis.route = ((name: string, params: unknown, absolute: boolean) =>
+        ziggyRoute(name, params as never, absolute, {
+            ...ziggyConfig,
+            location: new URL(ziggyConfig.location),
+        })) as typeof ziggyRoute;
+}
