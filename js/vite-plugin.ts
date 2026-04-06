@@ -1,10 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-
-interface VitePlugin {
-    name: string;
-    config?: (config: { root?: string }, env: { command: string }) => Record<string, unknown> | void;
-}
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import { modify, applyEdits, parse as parseJsonc, type ModificationOptions } from 'jsonc-parser';
+import type { Plugin } from 'vite';
 
 export interface InertiaModulesOptions {
     /** Path to the modules directory, relative to project root. Default: 'Modules' */
@@ -21,22 +18,45 @@ export interface InertiaModulesOptions {
 
     /** Prefix for auto-generated aliases. Default: '@' */
     prefix?: string;
+
+    /** Auto-update tsconfig.json with module paths and includes on dev/build start. Default: true */
+    syncTsConfig?: boolean;
+
+    /** Auto-inject Tailwind @source directives into CSS files that import tailwindcss. Default: true */
+    syncTailwind?: boolean;
+
+    /** Path to tsconfig.json, relative to project root. Default: 'tsconfig.json' */
+    tsConfigPath?: string;
 }
 
-export function inertiaModules(options: InertiaModulesOptions = {}): VitePlugin {
+interface ModuleInfo {
+    name: string;
+    alias: string;
+    jsPath: string;
+}
+
+export function inertiaModules(options: InertiaModulesOptions = {}): Plugin[] {
     const {
         modulesDir = 'Modules',
         conflictSuffix = '-module',
         conflicts,
         aliases = {},
         prefix = '@',
+        syncTsConfig = true,
+        syncTailwind = true,
+        tsConfigPath = 'tsconfig.json',
     } = options;
 
-    return {
+    let resolvedRoot = '';
+    let modulesPath = '';
+    let resolvedModules: ModuleInfo[] = [];
+    let hasSynced = false;
+
+    const aliasPlugin: Plugin = {
         name: 'laravel-modules-inertia',
         config(config) {
             const root = config.root || process.cwd();
-            const modulesPath = resolve(root, modulesDir);
+            modulesPath = resolve(root, modulesDir);
 
             if (!existsSync(modulesPath)) {
                 return {};
@@ -52,6 +72,8 @@ export function inertiaModules(options: InertiaModulesOptions = {}): VitePlugin 
                 [`${prefix}modules`]: modulesPath,
             };
 
+            resolvedModules = [];
+
             for (const mod of modules) {
                 const jsPath = join(modulesPath, mod.name, 'resources', 'js');
 
@@ -59,8 +81,10 @@ export function inertiaModules(options: InertiaModulesOptions = {}): VitePlugin 
                     continue;
                 }
 
+                let alias: string;
+
                 if (aliases[mod.name]) {
-                    const alias = aliases[mod.name];
+                    alias = aliases[mod.name];
 
                     if (knownPackages && isAliasConflicting(alias, knownPackages)) {
                         warnings.push(
@@ -68,23 +92,23 @@ export function inertiaModules(options: InertiaModulesOptions = {}): VitePlugin 
                                 `This may shadow imports starting with "${alias}".`,
                         );
                     }
-
-                    resolvedAliases[alias] = jsPath;
                 } else {
                     const lowerName = mod.name.toLowerCase();
 
                     if (conflictSet.has(lowerName)) {
-                        const aliasName = `${prefix}${lowerName}${conflictSuffix}`;
+                        alias = `${prefix}${lowerName}${conflictSuffix}`;
                         warnings.push(
                             `Module "${mod.name}" conflicts with a package in node_modules. ` +
-                                `Alias auto-renamed to "${aliasName}". ` +
+                                `Alias auto-renamed to "${alias}". ` +
                                 `Use the "aliases" option to set a custom name.`,
                         );
-                        resolvedAliases[aliasName] = jsPath;
                     } else {
-                        resolvedAliases[`${prefix}${lowerName}`] = jsPath;
+                        alias = `${prefix}${lowerName}`;
                     }
                 }
+
+                resolvedAliases[alias] = jsPath;
+                resolvedModules.push({ name: mod.name, alias, jsPath });
             }
 
             for (const warning of warnings) {
@@ -97,7 +121,126 @@ export function inertiaModules(options: InertiaModulesOptions = {}): VitePlugin 
                 },
             };
         },
+        configResolved(config) {
+            resolvedRoot = config.root;
+        },
+        buildStart() {
+            if (!syncTsConfig || hasSynced) return;
+            hasSynced = true;
+
+            if (!resolvedRoot || !existsSync(resolve(resolvedRoot, modulesDir))) return;
+
+            syncTsConfigFile(resolvedRoot, modulesDir, resolvedModules, tsConfigPath);
+        },
     };
+
+    const tailwindPlugin: Plugin = {
+        name: 'laravel-modules-inertia:tailwind',
+        enforce: 'pre',
+        transform(code, id) {
+            if (!syncTailwind) return null;
+            if (!id.endsWith('.css')) return null;
+            if (!/@import\s+['"]tailwindcss/.test(code)) return null;
+            if (!resolvedRoot || !existsSync(resolve(resolvedRoot, modulesDir))) return null;
+
+            const cssDir = dirname(id);
+            const relPath = relative(cssDir, resolve(resolvedRoot, modulesDir));
+
+            const sources = [
+                `@source '${relPath}/*/resources/views';`,
+                `@source '${relPath}/*/resources/js';`,
+            ];
+
+            const newDirectives = sources.filter((s) => !code.includes(s));
+
+            if (newDirectives.length === 0) return null;
+
+            return {
+                code: newDirectives.join('\n') + '\n' + code,
+                map: null,
+            };
+        },
+    };
+
+    return [aliasPlugin, tailwindPlugin];
+}
+
+function syncTsConfigFile(
+    root: string,
+    modulesDir: string,
+    modules: ModuleInfo[],
+    tsConfigPath: string,
+): void {
+    const fullPath = resolve(root, tsConfigPath);
+
+    if (!existsSync(fullPath)) return;
+
+    let text: string;
+    try {
+        text = readFileSync(fullPath, 'utf-8');
+    } catch {
+        return;
+    }
+
+    const original = text;
+    const formatOptions: ModificationOptions['formattingOptions'] = {
+        tabSize: 4,
+        insertSpaces: true,
+    };
+
+    // Sync compilerOptions.paths
+    const paths: Record<string, string[]> = {
+        [`@modules/*`]: [`./${modulesDir}/*`],
+    };
+
+    for (const mod of modules) {
+        paths[`${mod.alias}/*`] = [`./${modulesDir}/${mod.name}/resources/js/*`];
+    }
+
+    for (const [key, value] of Object.entries(paths)) {
+        const edits = modify(text, ['compilerOptions', 'paths', key], value, { formattingOptions: formatOptions });
+        text = applyEdits(text, edits);
+    }
+
+    // Sync include entries
+    const includes = [
+        `${modulesDir}/*/resources/views/**/*.ts`,
+        `${modulesDir}/*/resources/views/**/*.tsx`,
+        `${modulesDir}/*/resources/js/**/*.ts`,
+        `${modulesDir}/*/resources/js/**/*.tsx`,
+    ];
+
+    for (const include of includes) {
+        // Check if already present by parsing current includes
+        const currentIncludes = parseCurrentIncludes(text);
+        if (!currentIncludes.includes(include)) {
+            const edits = modify(text, ['include', -1], include, {
+                formattingOptions: formatOptions,
+                isArrayInsertion: true,
+            });
+            text = applyEdits(text, edits);
+        }
+    }
+
+    if (text !== original) {
+        try {
+            writeFileSync(fullPath, text, 'utf-8');
+            console.info('\x1b[36m[laravel-modules-inertia]\x1b[0m Synced tsconfig.json with module paths.');
+        } catch {
+            console.warn(
+                '\x1b[33m[laravel-modules-inertia]\x1b[0m Could not write tsconfig.json. Run with --write manually.',
+            );
+        }
+    }
+}
+
+function parseCurrentIncludes(text: string): string[] {
+    try {
+        const parsed = parseJsonc(text);
+        return Array.isArray(parsed?.include) ? parsed.include : [];
+    } catch {
+        return [];
+    }
 }
 
 /**
