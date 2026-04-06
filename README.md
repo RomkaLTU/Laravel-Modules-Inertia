@@ -2,7 +2,7 @@
 
 If you're using [nwidart/laravel-modules](https://laravelmodules.com) with [Inertia.js](https://inertiajs.com), you've probably run into the same problem we did: Inertia has no idea your modules exist. Page resolution breaks, Vite doesn't know where your module assets live, and you end up writing a bunch of glue code to make it all work.
 
-This package fixes that. It gives you automatic page resolution for module views, a Vite plugin that sets up import aliases for your modules, and an artisan command to keep your `tsconfig.json` and Tailwind config in sync.
+This package fixes that. It gives you automatic page resolution for module views and a Vite plugin that sets up import aliases, syncs your `tsconfig.json`, and injects Tailwind source paths — all automatically.
 
 ## Requirements
 
@@ -56,11 +56,12 @@ If no matching file is found in the module, it falls back to the default Inertia
 
 ### 1. Vite Plugin
 
-Add the Vite plugin to your `vite.config.ts`:
+Add the Vite plugin to your `vite.config.ts`. Place `inertiaModules()` **before** `tailwindcss()` in the plugins array so that Tailwind `@source` directives are injected automatically:
 
 ```ts
 import { defineConfig } from 'vite';
 import laravel from 'laravel-vite-plugin';
+import tailwindcss from '@tailwindcss/vite';
 import { inertiaModules } from 'laravel-modules-inertia/vite';
 
 export default defineConfig({
@@ -70,16 +71,18 @@ export default defineConfig({
             refresh: true,
         }),
         inertiaModules(),
+        tailwindcss(),
     ],
 });
 ```
 
-The plugin scans your `Modules/` directory and creates Vite aliases for each module that has a `resources/js/` folder:
+The plugin does three things automatically:
 
-- `Modules/Fleet/resources/js/` → `@fleet`
-- `Modules/Auth/resources/js/` → `@auth`
+1. **Vite aliases** — Scans your `Modules/` directory and creates aliases for each module with a `resources/js/` folder (`@fleet`, `@auth`, etc.)
+2. **TypeScript config** — Syncs `tsconfig.json` with module paths and includes on every `vite dev` / `vite build` start, preserving existing comments and formatting
+3. **Tailwind sources** — Injects `@source` directives into CSS files that import `tailwindcss`, so Tailwind scans your module templates for classes
 
-This means you can import from modules like this:
+After the plugin runs, you can import from modules like this:
 
 ```ts
 import { TruckForm } from '@fleet/components/TruckForm';
@@ -106,6 +109,9 @@ inertiaModules({
 | `conflictSuffix` | `'-module'` | Suffix appended when an alias conflicts with an npm package |
 | `conflicts` | auto-detected | Module names (lowercase) that should get the conflict suffix |
 | `aliases` | `{}` | Explicit alias overrides, e.g. `{ Fleet: '@my-fleet' }` |
+| `syncTsConfig` | `true` | Auto-update `tsconfig.json` with module paths and includes |
+| `syncTailwind` | `true` | Auto-inject `@source` directives into Tailwind CSS files |
+| `tsConfigPath` | `'tsconfig.json'` | Path to tsconfig.json, relative to project root |
 
 ### 2. Page Resolver
 
@@ -155,51 +161,21 @@ createInertiaApp({
 | `appPagePrefix` | `'../pages/'` | Prefix in glob keys for app pages |
 | `extension` | `'.tsx'` | File extension for pages |
 
-### 3. Sync TypeScript & Tailwind Config
+### 3. Diagnostic Command (Optional)
 
-After creating or removing modules, run:
+The Vite plugin handles TypeScript and Tailwind configuration automatically (see step 1). If you need to inspect what the plugin would generate, or prefer to manage your config manually, an artisan command is available:
 
 ```bash
 php artisan inertia-modules:sync
 ```
 
-This outputs the configuration you need to add to your `tsconfig.json` and CSS file:
-
-**TypeScript paths** — so your editor understands the `@module` import aliases:
-
-```json
-{
-    "compilerOptions": {
-        "paths": {
-            "@modules/*": ["./Modules/*"],
-            "@fleet/*": ["./Modules/Fleet/resources/js/*"]
-        }
-    },
-    "include": [
-        "Modules/*/resources/views/**/*.ts",
-        "Modules/*/resources/views/**/*.tsx",
-        "Modules/*/resources/js/**/*.ts",
-        "Modules/*/resources/js/**/*.tsx"
-    ]
-}
-```
-
-**Tailwind sources** — so Tailwind scans your module templates:
-
-```css
-@source '../../Modules/*/resources/views';
-@source '../../Modules/*/resources/js';
-```
-
-#### Auto-write mode
-
-To patch `tsconfig.json` directly instead of copying manually:
+This outputs the TypeScript paths, includes, and Tailwind `@source` directives for your current modules. To patch `tsconfig.json` directly from the PHP side:
 
 ```bash
 php artisan inertia-modules:sync --write
 ```
 
-This merges the paths and includes into your existing `tsconfig.json` without touching your other settings. Safe to run multiple times — it won't create duplicate entries.
+This is useful in environments where Vite isn't available (e.g., CI pipelines that only run PHP). For day-to-day development, the Vite plugin handles everything.
 
 ## Expected Module Structure
 
