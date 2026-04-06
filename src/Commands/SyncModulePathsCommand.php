@@ -104,7 +104,8 @@ class SyncModulePathsCommand extends Command
             return;
         }
 
-        $tsconfig = json_decode($files->get($tsconfigPath), true);
+        $raw = $files->get($tsconfigPath);
+        $tsconfig = json_decode($this->stripJsonComments($raw), true);
 
         if (! is_array($tsconfig)) {
             $this->error('Failed to parse tsconfig.json.');
@@ -138,5 +139,76 @@ class SyncModulePathsCommand extends Command
         );
 
         $this->components->info('Updated tsconfig.json with module paths and includes.');
+    }
+
+    /**
+     * Strip comments and trailing commas from a JSONC string so it can
+     * be decoded with json_decode. This handles single-line (//) and
+     * multi-line comments, and trailing commas before } or ].
+     */
+    private function stripJsonComments(string $json): string
+    {
+        $result = '';
+        $length = strlen($json);
+        $inString = false;
+        $i = 0;
+
+        while ($i < $length) {
+            $char = $json[$i];
+
+            // Handle string literals (skip content inside strings)
+            if ($inString) {
+                $result .= $char;
+                if ($char === '\\') {
+                    $i++;
+                    if ($i < $length) {
+                        $result .= $json[$i];
+                    }
+                } elseif ($char === '"') {
+                    $inString = false;
+                }
+                $i++;
+
+                continue;
+            }
+
+            // Start of string
+            if ($char === '"') {
+                $inString = true;
+                $result .= $char;
+                $i++;
+
+                continue;
+            }
+
+            // Single-line comment
+            if ($char === '/' && $i + 1 < $length && $json[$i + 1] === '/') {
+                // Skip to end of line
+                while ($i < $length && $json[$i] !== "\n") {
+                    $i++;
+                }
+
+                continue;
+            }
+
+            // Multi-line comment
+            if ($char === '/' && $i + 1 < $length && $json[$i + 1] === '*') {
+                $i += 2;
+                while ($i + 1 < $length && ! ($json[$i] === '*' && $json[$i + 1] === '/')) {
+                    $i++;
+                }
+                $i += 2; // skip */
+
+                continue;
+            }
+
+            $result .= $char;
+            $i++;
+        }
+
+        // Remove trailing commas before ] or }
+        $result = (string) preg_replace('/,\s*([\]}])/s', '$1', $result);
+
+        return $result;
     }
 }

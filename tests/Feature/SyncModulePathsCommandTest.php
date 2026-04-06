@@ -119,6 +119,38 @@ it('writes merged paths and includes to tsconfig.json', function () {
     expect($updated['include'])->toContain('Modules/*/resources/views/**/*.tsx');
 });
 
+it('writes tsconfig.json that contains comments (JSONC)', function () {
+    createModule($this->modulesPath, 'Fleet');
+
+    app()->setBasePath($this->tempDir);
+
+    $jsonc = <<<'JSONC'
+{
+    // TypeScript compiler options
+    "compilerOptions": {
+        /* path aliases */
+        "paths": {
+            "@/*": ["./resources/js/*"]
+        },
+    },
+    "include": ["resources/js/**/*.ts"],
+}
+JSONC;
+    file_put_contents($this->tempDir.'/tsconfig.json', $jsonc);
+
+    $this->artisan('inertia-modules:sync', ['--write' => true])
+        ->assertSuccessful();
+
+    $updated = json_decode(file_get_contents($this->tempDir.'/tsconfig.json'), true);
+
+    expect($updated)->toBeArray();
+    expect($updated['compilerOptions']['paths'])->toHaveKey('@/*');
+    expect($updated['compilerOptions']['paths'])->toHaveKey('@fleet/*');
+    expect($updated['compilerOptions']['paths'])->toHaveKey('@modules/*');
+    expect($updated['include'])->toContain('resources/js/**/*.ts');
+    expect($updated['include'])->toContain('Modules/*/resources/views/**/*.tsx');
+});
+
 it('does not duplicate includes when writing twice', function () {
     createModule($this->modulesPath, 'Fleet');
 
