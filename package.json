@@ -1,6 +1,6 @@
 {
     "name": "laravel-modules-inertia",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "Vite plugin and page resolver for nwidart/laravel-modules + Inertia.js",
     "type": "module",
     "exports": {
