@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this project adheres to [Semantic Versioning](https://semver.org).
 
+## [0.2.0] - 2026-04-06
+
+### Added
+
+- Automatic `tsconfig.json` syncing via Vite plugin — module paths and includes are merged on every `vite dev` / `vite build` start, preserving comments and formatting (uses `jsonc-parser`)
+- Automatic Tailwind `@source` directive injection — CSS files importing `tailwindcss` receive module source paths automatically
+- New plugin options: `syncTsConfig`, `syncTailwind`, `tsConfigPath`
+
+### Changed
+
+- `inertiaModules()` now returns `Plugin[]` (array of two Vite plugins) instead of a single plugin
+- Step 3 ("Sync TypeScript & Tailwind Config") is no longer a required installation step
+
+### Fixed
+
+- `inertia-modules:sync --write` failing with "Failed to parse tsconfig.json" on files containing comments or trailing commas (JSONC format)
+
 ## [0.1.1] - 2026-04-06
 
 ### Changed

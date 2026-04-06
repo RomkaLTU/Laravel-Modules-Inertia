@@ -1,6 +1,6 @@
 import {
   inertiaModules
-} from "./chunk-EYBAZNDR.js";
+} from "./chunk-AGMGEVMI.js";
 export {
   inertiaModules
 };
