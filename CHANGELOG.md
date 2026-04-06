@@ -4,7 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com), and this project adheres to [Semantic Versioning](https://semver.org).
 
-## [0.1.0] - Unreleased
+## [0.1.1] - 2026-04-06
+
+### Changed
+
+- Update GitHub Actions to Node.js 24-compatible versions (checkout v6, setup-node v6, pnpm/action-setup v5)
+
+### Added
+
+- Automated GitHub Release creation on tag push via release workflow
+
+## [0.1.0] - 2026-04-06
 
 ### Added
 
